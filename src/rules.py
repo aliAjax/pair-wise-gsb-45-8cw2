@@ -2,11 +2,13 @@
 from typing import Any, Dict, Iterable, Tuple
 
 from .domain import Actor, Conflict, ValidationError, boolean, choice, integer, number, text, text_list
+from .tug_rules import COMPLETED, INBOUND, OUTBOUND, DANGEROUS_CLASSES
 
 
 INITIAL_STATE = "draft"
 CREATE_ROLES = {'port_controller'}
-ACTION_ROLES = {'confirm': {'port_controller'}, 'berth': {'port_controller'}, 'depart': {'port_controller'}, 'cancel': {'port_controller'}}
+_TUG_ROLES = {'port_controller', 'tug_dispatcher'}
+ACTION_ROLES = {'confirm': {'port_controller'}, 'berth': {'port_controller'}, 'depart': {'port_controller'}, 'cancel': {'port_controller'}, 'register_tug': {'port_controller'}, 'arrange_escort': _TUG_ROLES, 'complete_escort': _TUG_ROLES}
 TRANSITIONS = {'confirm': {'draft': 'confirmed'}, 'berth': {'confirmed': 'berthed'}, 'depart': {'berthed': 'departed'}, 'cancel': {'draft': 'cancelled', 'confirmed': 'cancelled'}}
 
 
@@ -44,7 +46,10 @@ class DomainRules:
         if berth_depth - draft < 0.5:
             raise ValidationError("剩余水深不足")
         if dangerous:
-            text(p, "dangerous_class")
+            dangerous_class = str(text(p, "dangerous_class"))
+            if dangerous_class not in DANGEROUS_CLASSES:
+                raise ValidationError("危险品等级必须是1~9类")
+            p["dangerous_class"] = dangerous_class
         return p
 
     def prepare_create(self, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -68,6 +73,15 @@ class DomainRules:
             raise Conflict("当前状态不允许执行%s" % action)
         return allowed
 
+    @staticmethod
+    def require_escort_done(payload: Dict[str, Any], leg: str, label: str) -> None:
+        escort = payload.get("escort") or {}
+        leg_info = escort.get(leg)
+        if not leg_info:
+            raise Conflict("%s护航尚未安排" % label)
+        if leg_info.get("status") != COMPLETED:
+            raise Conflict("%s护航未完成（当前：%s）" % (label, leg_info.get("status", "待配")))
+
     def apply_action(self, record: Dict[str, Any], action: str, data: Dict[str, Any]) -> Tuple[str, Dict[str, Any], str]:
         new_state = self.require_transition(record, action)
         data = dict(data or {})
@@ -79,12 +93,14 @@ class DomainRules:
             changes["pilot_id"] = pilot
             summary = "已确认引航员"
         elif action == "berth":
+            self.require_escort_done(p, INBOUND, "进港")
             actual = number(data, "actual_draft_m", 0)
             if float(p["berth_depth_m"]) - actual < 0.5:
                 raise ValidationError("实际吃水导致水深不足")
             changes["actual_draft_m"] = actual
             summary = "船舶已靠泊"
         elif action == "depart":
+            self.require_escort_done(p, OUTBOUND, "出港")
             if not boolean(data, "cargo_operation_complete"):
                 raise ValidationError("货物作业尚未完成")
             summary = "船舶已离泊"

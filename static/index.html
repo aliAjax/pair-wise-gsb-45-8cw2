@@ -3,31 +3,234 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>港口泊位与航道调度</title>
+  <title>港口泊位与拖轮护航调度</title>
   <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 2rem; color: #17212b; }
-    main { max-width: 960px; margin: auto; }
-    button { padding: .55rem .9rem; cursor: pointer; }
-    pre { background: #f4f6f8; padding: 1rem; overflow: auto; border-radius: 8px; }
-    .row { display: flex; gap: 1rem; align-items: center; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 2rem; color: #17212b; background: #f7f9fb; }
+    main { max-width: 1100px; margin: auto; }
+    section { background: #fff; border: 1px solid #e3e8ee; border-radius: 10px; padding: 1.1rem 1.3rem; margin-bottom: 1.2rem; }
+    h1 { margin-bottom: .3rem; }
+    h2 { margin: 0 0 .8rem; font-size: 1.15rem; }
+    label { font-size: .85rem; color: #465463; }
+    input, select { padding: .4rem .5rem; border: 1px solid #c6cfd8; border-radius: 6px; font-size: .9rem; }
+    button { padding: .5rem .9rem; cursor: pointer; border: none; border-radius: 6px; background: #1f6feb; color: #fff; font-size: .9rem; }
+    button.secondary { background: #5a6b7c; }
+    button.danger { background: #c0392b; }
+    button:disabled { background: #aeb9c4; cursor: not-allowed; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: .6rem; align-items: end; }
+    .field { display: flex; flex-direction: column; gap: .25rem; }
+    table { width: 100%; border-collapse: collapse; font-size: .88rem; }
+    th, td { text-align: left; padding: .45rem .55rem; border-bottom: 1px solid #edf0f3; vertical-align: top; }
+    th { color: #5a6b7c; font-weight: 600; background: #f4f6f8; }
+    .tag { display: inline-block; padding: .1rem .5rem; border-radius: 999px; font-size: .78rem; }
+    .tag.draft { background: #eef1f4; }
+    .tag.confirmed { background: #e3effd; color: #1f6feb; }
+    .tag.berthed { background: #e6f6ec; color: #1a7f43; }
+    .tag.departed { background: #e9ecef; color: #555; }
+    .tag.cancelled { background: #fdecea; color: #c0392b; }
+    .tag.allocated { background: #e6f6ec; color: #1a7f43; }
+    .tag.pending { background: #fdf3e0; color: #b06a00; }
+    .tag.completed { background: #e3effd; color: #1f6feb; }
+    .tag.released { background: #eef1f4; color: #777; }
+    .reason { color: #c0392b; font-size: .82rem; }
+    .muted { color: #7a8794; font-size: .82rem; }
+    .actions { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .6rem; }
+    .msg { margin: .6rem 0 0; font-size: .86rem; min-height: 1.1em; }
+    .msg.ok { color: #1a7f43; }
+    .msg.err { color: #c0392b; }
+    pre { background: #1e2530; color: #d6e2f0; padding: .8rem; overflow: auto; border-radius: 8px; font-size: .8rem; max-height: 260px; }
   </style>
 </head>
 <body>
 <main>
-  <h1>港口泊位与航道调度</h1>
-  <p>最小演示页。完整业务流程通过README中的JSON接口调用。</p>
-  <div class="row"><button id="load">加载记录</button><button id="stats">查看状态统计</button></div>
-  <pre id="output">点击上方按钮读取服务状态。</pre>
+  <h1>港口泊位与拖轮护航调度</h1>
+  <p class="muted">排船排泊位 + 进出港拖轮护航：最低马力按船长与危险品等级计算，同一条拖轮不同时服务两船，推力不足或时段冲突进入待配区。</p>
+  <p class="msg" id="msg"></p>
+
+  <section>
+    <h2>拖轮登记（名称 / 马力 / 可用时段）</h2>
+    <div class="grid">
+      <div class="field"><label>名称</label><input id="tug-name" placeholder="如 海港拖01"></div>
+      <div class="field"><label>马力</label><input id="tug-hp" type="number" min="1" placeholder="4000"></div>
+      <div class="field"><label>可用起（时）</label><input id="tug-from" type="number" min="0" max="23" value="0"></div>
+      <div class="field"><label>可用止（时）</label><input id="tug-to" type="number" min="1" max="24" value="24"></div>
+      <button onclick="registerTug()">登记拖轮</button>
+      <button class="secondary" onclick="loadAll()">刷新</button>
+    </div>
+    <table style="margin-top:.8rem"><thead><tr><th>名称</th><th>马力</th><th>可用时段</th></tr></thead>
+      <tbody id="tugs"><tr><td colspan="3" class="muted">点击刷新加载。</td></tr></tbody></table>
+  </section>
+
+  <section>
+    <h2>新建靠泊计划</h2>
+    <div class="grid">
+      <div class="field"><label>计划号</label><input id="p-ref" placeholder="VOY-1"></div>
+      <div class="field"><label>船名</label><input id="p-vessel" value="HaiYun"></div>
+      <div class="field"><label>泊位</label><input id="p-berth" value="B12"></div>
+      <div class="field"><label>船长(米)</label><input id="p-vlen" type="number" value="180"></div>
+      <div class="field"><label>泊位长(米)</label><input id="p-blen" type="number" value="220"></div>
+      <div class="field"><label>吃水(米)</label><input id="p-draft" type="number" step="0.1" value="10.2"></div>
+      <div class="field"><label>泊位深(米)</label><input id="p-bdepth" type="number" step="0.1" value="11.5"></div>
+      <div class="field"><label>ETA(时)</label><input id="p-eta" type="number" min="0" max="23" value="6"></div>
+      <div class="field"><label>ETD(时)</label><input id="p-etd" type="number" min="1" max="24" value="18"></div>
+      <div class="field"><label>风险等级</label>
+        <select id="p-risk"><option value="low">low</option><option value="medium" selected>medium</option><option value="high">high</option></select></div>
+      <div class="field"><label>危险品</label>
+        <select id="p-dg" onchange="document.getElementById('p-class').disabled=this.value==='false'">
+          <option value="false" selected>否</option><option value="true">是</option></select></div>
+      <div class="field"><label>危险品等级1~9</label><input id="p-class" type="number" min="1" max="9" value="1" disabled></div>
+      <button onclick="createPlan()">创建计划</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>待配区（推力不足 / 时段冲突）</h2>
+    <table><thead><tr><th>计划</th><th>航段</th><th>时段</th><th>最低马力</th><th>原因</th></tr></thead>
+      <tbody id="pending"><tr><td colspan="5" class="muted">暂无待配航段。</td></tr></tbody></table>
+  </section>
+
+  <section>
+    <h2>靠泊计划与护航</h2>
+    <table><thead><tr>
+      <th>计划 / 状态</th><th>船期</th><th>进港护航</th><th>出港护航</th><th>操作</th>
+    </tr></thead><tbody id="plans"><tr><td colspan="5" class="muted">点击刷新加载。</td></tr></tbody></table>
+  </section>
+
+  <section>
+    <h2>原始数据</h2>
+    <pre id="output">操作后在此显示最新响应。</pre>
+  </section>
 </main>
 <script>
-const headers = {"X-User-Id":"demo-admin","X-Role":"admin","X-Org":"demo"};
-async function show(path) {
-  const response = await fetch(path, {headers});
-  const data = await response.json();
-  document.getElementById("output").textContent = JSON.stringify(data, null, 2);
+const headers = {"X-User-Id":"demo-controller","X-Role":"port_controller","X-Org":"demo","Content-Type":"application/json"};
+const out = document.getElementById("output");
+const msg = document.getElementById("msg");
+
+function flash(text, ok) {
+  msg.textContent = text;
+  msg.className = "msg " + (ok ? "ok" : "err");
 }
-document.getElementById("load").onclick = () => show("/api/records?limit=20");
-document.getElementById("stats").onclick = () => show("/api/stats");
+async function api(path, method, body) {
+  const response = await fetch(path, {method: method || "GET", headers, body: body ? JSON.stringify(body) : undefined});
+  const data = await response.json();
+  if (!response.ok) throw new Error((data.message || response.statusText));
+  return data;
+}
+function show(data) { out.textContent = JSON.stringify(data, null, 2); }
+function tag(status) { return `<span class="tag ${status}">${status}</span>`; }
+function val(id) { return document.getElementById(id).value; }
+
+async function registerTug() {
+  try {
+    const data = {name: val("tug-name").trim(), horsepower: Number(val("tug-hp")),
+      available_from_hour: Number(val("tug-from")), available_to_hour: Number(val("tug-to"))};
+    const tug = await api("/api/tugs", "POST", {data});
+    flash("拖轮 " + tug.name + " 已登记", true);
+    loadAll();
+  } catch (e) { flash(e.message, false); }
+}
+
+async function createPlan() {
+  try {
+    const data = {
+      vessel: val("p-vessel"), berth: val("p-berth"),
+      vessel_length_m: Number(val("p-vlen")), berth_length_m: Number(val("p-blen")),
+      draft_m: Number(val("p-draft")), berth_depth_m: Number(val("p-bdepth")),
+      eta_hour: Number(val("p-eta")), etd_hour: Number(val("p-etd")),
+      risk_level: val("p-risk"), dangerous_goods: val("p-dg") === "true",
+      dangerous_class: val("p-class")};
+    const record = await api("/api/records", "POST", {reference: val("p-ref").trim(), data});
+    flash("计划已创建：#" + record.id, true);
+    loadAll();
+  } catch (e) { flash(e.message, false); }
+}
+
+async function loadTugs() {
+  const data = await api("/api/tugs");
+  const body = document.getElementById("tugs");
+  if (!data.items.length) { body.innerHTML = '<tr><td colspan="3" class="muted">尚无拖轮。</td></tr>'; return; }
+  body.innerHTML = data.items.map(t => `<tr><td>${t.name}</td><td>${t.horsepower}</td>
+    <td>${t.available_from_hour}–${t.available_to_hour}时</td></tr>`).join("");
+}
+
+function legCell(leg) {
+  if (!leg) return '<span class="muted">未安排</span>';
+  let html = `${tag(leg.status)} <span class="muted">${leg.start_hour}-${leg.end_hour}时 · 需${leg.required_hp}匹</span>`;
+  if (leg.tugs && leg.tugs.length) html += `<br><span class="muted">拖轮：${leg.tugs.map(t => t.name).join("、")}（${leg.assigned_hp}匹）</span>`;
+  if (leg.status === "pending") html += `<br><span class="reason">${leg.reason}</span>`;
+  if (leg.status === "completed") html += `<br><span class="muted">实际${leg.actual_horsepower}匹 / ${leg.duration_hours}小时 / ${leg.fee}元</span>`;
+  return html;
+}
+
+function actionButtons(rec) {
+  const v = rec.version, id = rec.id, s = rec.state;
+  let html = '<div class="actions">';
+  html += `<button onclick="arrange(${id},${v})">安排护航</button>`;
+  const esc = rec.payload.escort || {};
+  if (s === "draft") html += `<button class="secondary" onclick="confirmPlan(${id},${v})">确认引航员</button>`;
+  if (esc.inbound && esc.inbound.status === "allocated")
+    html += `<button onclick="completeEscort(${id},${v},'inbound')">进港护航结束</button>`;
+  if (s === "confirmed") html += `<button class="secondary" onclick="berth(${id},${v})">靠泊</button>`;
+  if (esc.outbound && esc.outbound.status === "allocated")
+    html += `<button onclick="completeEscort(${id},${v},'outbound')">出港护航结束</button>`;
+  if (s === "berthed") html += `<button class="secondary" onclick="depart(${id},${v})">离泊</button>`;
+  if (s === "draft" || s === "confirmed") html += `<button class="danger" onclick="cancelPlan(${id},${v})">取消并释放</button>`;
+  return html + "</div>";
+}
+
+async function loadPlans() {
+  const [records, board] = await Promise.all([api("/api/records?limit=100"), api("/api/escorts")]);
+  const legsByRecord = {};
+  board.items.forEach(l => (legsByRecord[l.record_id] = legsByRecord[l.record_id] || {})[l.leg] = l);
+  const pending = board.items.filter(l => l.status === "pending");
+  document.getElementById("pending").innerHTML = pending.length ? pending.map(l => {
+    const rec = records.items.find(r => r.id === l.record_id);
+    return `<tr><td>${rec ? rec.reference : l.record_id}</td><td>${l.leg === "inbound" ? "进港" : "出港"}</td>
+      <td>${l.start_hour}-${l.end_hour}时</td><td>${l.required_hp}</td><td class="reason">${l.reason}</td></tr>`;
+  }).join("") : '<tr><td colspan="5" class="muted">暂无待配航段。</td></tr>';
+
+  document.getElementById("plans").innerHTML = records.items.length ? records.items.map(r => {
+    const p = r.payload, esc = legsByRecord[r.id] || {};
+    return `<tr><td>#${r.id} ${r.reference}<br>${tag(r.state)}<br><span class="muted">${p.vessel} → ${p.berth}${p.dangerous_goods ? " / 危险品" + p.dangerous_class + "类" : ""}</span></td>
+      <td>${p.eta_hour}–${p.etd_hour}时<br><span class="muted">船长${p.vessel_length_m}米</span></td>
+      <td>${legCell(esc.inbound)}</td><td>${legCell(esc.outbound)}</td>
+      <td>${actionButtons(r)}</td></tr>`;
+  }).join("") : '<tr><td colspan="5" class="muted">尚无计划。</td></tr>';
+}
+
+async function act(recId, version, action, data, okText) {
+  try {
+    const rec = await api(`/api/records/${recId}/actions/${action}`, "POST", {expected_version: version, data: data || {}});
+    show(rec); flash(okText, true); loadAll();
+  } catch (e) { flash(e.message, false); }
+}
+async function arrange(id, v) {
+  try { const rec = await api(`/api/records/${id}/escorts`, "POST", {expected_version: v}); show(rec); flash("护航已重新计算", true); loadAll(); }
+  catch (e) { flash(e.message, false); }
+}
+async function completeEscort(id, v, leg) {
+  const hp = prompt("实际护航总马力（匹）", "2000");
+  if (hp === null) return;
+  const hours = prompt("实际护航时长（小时，护航窗内）", "2");
+  if (hours === null) return;
+  try { const rec = await api(`/api/records/${id}/escorts/${leg}/complete`, "POST",
+      {expected_version: v, data: {actual_horsepower: Number(hp), duration_hours: Number(hours)}});
+    show(rec); flash("护航结束，实际马力/时长/费用已写入", true); loadAll(); }
+  catch (e) { flash(e.message, false); }
+}
+const confirmPlan = (id, v) => act(id, v, "confirm", {pilot_id: prompt("引航员编号", "P-01")}, "已确认引航员");
+const berth = (id, v) => act(id, v, "berth", {actual_draft_m: 10.3}, "船舶已靠泊");
+const depart = (id, v) => act(id, v, "depart", {cargo_operation_complete: true}, "船舶已离泊");
+async function cancelPlan(id, v) {
+  const reason = prompt("取消原因", "计划变更");
+  if (reason === null) return;
+  act(id, v, "cancel", {cancel_reason: reason}, "计划已取消，拖轮立即释放");
+}
+
+async function loadAll() {
+  try { await Promise.all([loadTugs(), loadPlans()]); }
+  catch (e) { flash(e.message, false); }
+}
+loadAll();
 </script>
 </body>
 </html>

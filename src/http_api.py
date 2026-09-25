@@ -12,6 +12,8 @@ from .domain import Actor, DomainError, PermissionDenied, ValidationError
 RECORD_RE = re.compile(r"^/api/records/(\d+)$")
 ACTION_RE = re.compile(r"^/api/records/(\d+)/actions/([a-z_]+)$")
 AUDIT_RE = re.compile(r"^/api/records/(\d+)/audit$")
+ESCORT_ARRANGE_RE = re.compile(r"^/api/records/(\d+)/escorts$")
+ESCORT_LEG_RE = re.compile(r"^/api/records/(\d+)/escorts/(inbound|outbound)/complete$")
 
 
 def make_handler(service: Any, static_dir: Path):
@@ -87,6 +89,14 @@ def make_handler(service: Any, static_dir: Path):
                 if parsed.path == "/api/stats":
                     self._send(200, service.stats(self._actor()))
                     return
+                if parsed.path == "/api/tugs":
+                    self._send(200, {"items": service.list_tugs(self._actor())})
+                    return
+                if parsed.path == "/api/escorts":
+                    query = parse_qs(parsed.query)
+                    only_pending = query.get("status", [""])[0] == "pending"
+                    self._send(200, {"items": service.escort_board(self._actor(), only_pending=only_pending)})
+                    return
                 self._send(404, {"error": "not_found", "message": "路径不存在"})
             except Exception as exc:
                 self._handle_error(exc)
@@ -98,6 +108,28 @@ def make_handler(service: Any, static_dir: Path):
                 if parsed.path == "/api/records":
                     record = service.create(self._actor(), body.get("reference", ""), body.get("data", {}))
                     self._send(201, record)
+                    return
+                if parsed.path == "/api/tugs":
+                    tug = service.register_tug(self._actor(), body.get("data", {}))
+                    self._send(201, tug)
+                    return
+                match = ESCORT_ARRANGE_RE.match(parsed.path)
+                if match:
+                    version = body.get("expected_version")
+                    if not isinstance(version, int):
+                        raise ValidationError("expected_version必须是整数")
+                    record = service.arrange_escorts(self._actor(), int(match.group(1)), version)
+                    self._send(200, record)
+                    return
+                match = ESCORT_LEG_RE.match(parsed.path)
+                if match:
+                    version = body.get("expected_version")
+                    if not isinstance(version, int):
+                        raise ValidationError("expected_version必须是整数")
+                    record = service.complete_escort(
+                        self._actor(), int(match.group(1)), version, match.group(2), body.get("data", {})
+                    )
+                    self._send(200, record)
                     return
                 match = ACTION_RE.match(parsed.path)
                 if match:
