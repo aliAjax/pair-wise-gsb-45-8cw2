@@ -8,13 +8,14 @@ INITIAL_STATE = "draft"
 CREATE_ROLES = {'port_controller'}
 ACTION_ROLES = {'confirm': {'port_controller'}, 'berth': {'port_controller'}, 'depart': {'port_controller'}, 'cancel': {'port_controller'}}
 TRANSITIONS = {'confirm': {'draft': 'confirmed'}, 'berth': {'confirmed': 'berthed'}, 'depart': {'berthed': 'departed'}, 'cancel': {'draft': 'cancelled', 'confirmed': 'cancelled'}}
+READ_ROLES = {'tug_dispatcher'}
 
 
 class DomainRules:
     INITIAL_STATE = INITIAL_STATE
 
     def known_role(self, role: str) -> bool:
-        all_roles = set(CREATE_ROLES)
+        all_roles = set(CREATE_ROLES) | READ_ROLES
         for roles in ACTION_ROLES.values():
             all_roles.update(roles)
         return role == "admin" or role in all_roles

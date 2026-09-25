@@ -6,28 +6,192 @@
   <title>港口泊位与航道调度</title>
   <style>
     body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 2rem; color: #17212b; }
-    main { max-width: 960px; margin: auto; }
+    main { max-width: 1080px; margin: auto; }
     button { padding: .55rem .9rem; cursor: pointer; }
+    input, select { padding: .4rem; }
     pre { background: #f4f6f8; padding: 1rem; overflow: auto; border-radius: 8px; }
-    .row { display: flex; gap: 1rem; align-items: center; }
+    .row { display: flex; gap: .6rem; align-items: flex-end; flex-wrap: wrap; }
+    section { border: 1px solid #dbe2ea; border-radius: 8px; padding: 1rem; margin: 1rem 0; }
+    h2 { font-size: 1.05rem; margin-top: 0; }
+    h3 { font-size: .95rem; margin-bottom: .3rem; }
+    table { border-collapse: collapse; width: 100%; margin: .5rem 0 1rem; }
+    th, td { border: 1px solid #dbe2ea; padding: .35rem .5rem; text-align: left; font-size: .9rem; }
+    label { font-size: .85rem; color: #445; display: flex; flex-direction: column; gap: .2rem; }
+    .pending { color: #b3541e; }
+    .assigned { color: #1d7a3d; }
+    .released { color: #6b7280; }
+    .completed { color: #1d4ed8; }
   </style>
 </head>
 <body>
 <main>
   <h1>港口泊位与航道调度</h1>
-  <p>最小演示页。完整业务流程通过README中的JSON接口调用。</p>
-  <div class="row"><button id="load">加载记录</button><button id="stats">查看状态统计</button></div>
+  <p>演示页：靠泊计划创建后自动安排进出港护航，推力不够或时段冲突进入待配区，取消计划立即释放拖轮。</p>
+
+  <section>
+    <h2>快捷查看</h2>
+    <div class="row">
+      <button id="load">加载记录</button>
+      <button id="stats">状态统计</button>
+      <button id="tugs">拖轮列表</button>
+      <button id="pending">待配区</button>
+    </div>
+    <div id="lists"></div>
+  </section>
+
+  <section>
+    <h2>新建靠泊计划（创建后自动派工进出港护航）</h2>
+    <div class="row">
+      <label>计划号<input id="p_ref" value="VOY-21001"></label>
+      <label>船名<input id="p_vessel" value="HaiYun"></label>
+      <label>泊位<input id="p_berth" value="B12"></label>
+      <label>船长(米)<input id="p_len" type="number" value="180"></label>
+      <label>泊位长(米)<input id="p_blen" type="number" value="220"></label>
+      <label>吃水(米)<input id="p_draft" type="number" step="0.1" value="10.2"></label>
+      <label>泊位水深(米)<input id="p_depth" type="number" step="0.1" value="11.5"></label>
+      <label>ETA(时)<input id="p_eta" type="number" value="6"></label>
+      <label>ETD(时)<input id="p_etd" type="number" value="18"></label>
+      <label>危险品等级
+        <select id="p_risk"><option value="low">low</option><option value="medium" selected>medium</option><option value="high">high</option></select>
+      </label>
+      <label>危险品船
+        <select id="p_dg"><option value="false" selected>否</option><option value="true">是</option></select>
+      </label>
+      <label>危险品类别<input id="p_dgc" value=""></label>
+      <button id="create">创建计划并派工</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>拖轮登记</h2>
+    <div class="row">
+      <label>名称<input id="t_name" value="Tuo-1"></label>
+      <label>马力<input id="t_hp" type="number" value="3200"></label>
+      <label>可用自(时)<input id="t_from" type="number" value="0"></label>
+      <label>可用至(时)<input id="t_to" type="number" value="24"></label>
+      <label>费率(元/马力时)<input id="t_rate" type="number" step="0.1" value="2.5"></label>
+      <button id="register">登记拖轮</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>护航详情</h2>
+    <div class="row">
+      <label>计划ID<input id="e_id" type="number" value="1"></label>
+      <button id="escorts">查看护航</button>
+      <button id="retry">待配航段重新派工</button>
+    </div>
+    <div id="escort_view"></div>
+  </section>
+
   <pre id="output">点击上方按钮读取服务状态。</pre>
 </main>
 <script>
 const headers = {"X-User-Id":"demo-admin","X-Role":"admin","X-Org":"demo"};
-async function show(path) {
-  const response = await fetch(path, {headers});
+const output = document.getElementById("output");
+const DIR_NAMES = {"inbound":"进港","outbound":"出港"};
+
+async function api(path, method = "GET", body = null) {
+  const options = {method, headers: {...headers}};
+  if (body !== null) {
+    options.headers["Content-Type"] = "application/json";
+    options.body = JSON.stringify(body);
+  }
+  const response = await fetch(path, options);
   const data = await response.json();
-  document.getElementById("output").textContent = JSON.stringify(data, null, 2);
+  if (!response.ok) throw new Error(data.message || ("HTTP " + response.status));
+  return data;
 }
-document.getElementById("load").onclick = () => show("/api/records?limit=20");
-document.getElementById("stats").onclick = () => show("/api/stats");
+function show(data) { output.textContent = typeof data === "string" ? data : JSON.stringify(data, null, 2); }
+async function run(fn) { try { await fn(); } catch (err) { show("错误：" + err.message); } }
+const val = id => document.getElementById(id).value;
+
+document.getElementById("load").onclick = () => run(async () => show(await api("/api/records?limit=20")));
+document.getElementById("stats").onclick = () => run(async () => show(await api("/api/stats")));
+document.getElementById("tugs").onclick = () => run(async () => {
+  const data = await api("/api/tugs");
+  show(data);
+  renderTugs(data.items || []);
+});
+document.getElementById("pending").onclick = () => run(async () => {
+  const data = await api("/api/escorts/pending");
+  show(data);
+  renderPending(data.items || []);
+});
+
+document.getElementById("create").onclick = () => run(async () => {
+  const record = await api("/api/records", "POST", {reference: val("p_ref"), data: {
+    vessel: val("p_vessel"), berth: val("p_berth"),
+    vessel_length_m: Number(val("p_len")), berth_length_m: Number(val("p_blen")),
+    draft_m: Number(val("p_draft")), berth_depth_m: Number(val("p_depth")),
+    eta_hour: Number(val("p_eta")), etd_hour: Number(val("p_etd")),
+    risk_level: val("p_risk"), dangerous_goods: val("p_dg") === "true", dangerous_class: val("p_dgc")
+  }});
+  show(record);
+  document.getElementById("e_id").value = record.id;
+  await loadEscorts(record.id);
+});
+
+document.getElementById("register").onclick = () => run(async () => {
+  show(await api("/api/tugs", "POST", {
+    name: val("t_name"), horsepower_hp: Number(val("t_hp")),
+    available_from_hour: Number(val("t_from")), available_to_hour: Number(val("t_to")),
+    rate_per_hp_hour: Number(val("t_rate"))
+  }));
+});
+
+document.getElementById("escorts").onclick = () => run(() => loadEscorts(Number(val("e_id"))));
+document.getElementById("retry").onclick = () => run(async () => {
+  const data = await api(`/api/records/${Number(val("e_id"))}/escorts/retry`, "POST", {});
+  show(data);
+  renderEscorts(data);
+});
+
+async function loadEscorts(id) {
+  const data = await api(`/api/records/${id}/escorts`);
+  show(data);
+  renderEscorts(data);
+}
+
+function renderEscorts(data) {
+  const view = document.getElementById("escort_view");
+  const legs = (data.legs || []).map(leg => {
+    const rows = (leg.assignments || []).map(a =>
+      `<tr><td>${a.tug_name}</td><td>${a.tug_hp}</td><td class="${a.status}">${a.status}</td>` +
+      `<td>${a.actual_hp ?? ""}</td><td>${a.actual_hours ?? ""}</td><td>${a.cost ?? ""}</td>` +
+      `<td>${a.status === "assigned" ? `<button data-assignment="${a.id}">完成护航</button>` : ""}</td></tr>`).join("");
+    const table = rows ? `<table><tr><th>拖轮</th><th>马力</th><th>状态</th><th>实际马力</th><th>时长(时)</th><th>费用</th><th></th></tr>${rows}</table>` : "";
+    return `<h3>${DIR_NAMES[leg.direction] || leg.direction}护航（${leg.window_start_hour}–${leg.window_end_hour}时）<span class="${leg.status}">${leg.status}</span></h3>` +
+      `<p>最低马力 ${leg.required_hp}，已配总马力 ${leg.assigned_hp}${leg.reason ? "；待配原因：" + leg.reason : ""}</p>${table}`;
+  }).join("");
+  view.innerHTML = `<h3>计划 ${data.reference}（${data.state}）护航状态：<span class="${data.escort_status}">${data.escort_status}</span>，最低马力 ${data.min_required_hp}</h3>` + legs;
+  view.querySelectorAll("button[data-assignment]").forEach(btn => {
+    btn.onclick = () => run(async () => {
+      const hours = prompt("实际护航时长（小时）", "2");
+      if (hours === null) return;
+      const hp = prompt("实际马力（留空按登记马力）", "");
+      const body = {actual_hours: Number(hours)};
+      if (hp) body.actual_hp = Number(hp);
+      await api(`/api/escorts/assignments/${btn.dataset.assignment}/complete`, "POST", body);
+      await loadEscorts(Number(val("e_id")));
+    });
+  });
+}
+
+function renderTugs(tugs) {
+  const rows = tugs.map(t => {
+    const busy = (t.active_assignments || []).map(a => `计划${a.record_id} ${DIR_NAMES[a.direction] || a.direction} ${a.window_start_hour}–${a.window_end_hour}时`).join("；");
+    return `<tr><td>${t.id}</td><td>${t.name}</td><td>${t.horsepower_hp}</td><td>${t.available_from_hour}–${t.available_to_hour}时</td><td>${t.rate_per_hp_hour}</td><td>${busy}</td></tr>`;
+  }).join("");
+  document.getElementById("lists").innerHTML = `<h3>拖轮列表</h3><table><tr><th>ID</th><th>名称</th><th>马力</th><th>可用时段</th><th>费率</th><th>已派任务</th></tr>${rows}</table>`;
+}
+
+function renderPending(items) {
+  const rows = items.map(i =>
+    `<tr><td>${i.record_id}</td><td>${i.reference}</td><td>${i.vessel}</td><td>${DIR_NAMES[i.direction] || i.direction}</td>` +
+    `<td>${i.window_start_hour}–${i.window_end_hour}时</td><td>${i.required_hp}</td><td class="pending">${i.reason}</td></tr>`).join("");
+  document.getElementById("lists").innerHTML = `<h3>待配区（${items.length}）</h3><table><tr><th>计划</th><th>编号</th><th>船名</th><th>航段</th><th>时间窗</th><th>最低马力</th><th>原因</th></tr>${rows}</table>`;
+}
 </script>
 </body>
 </html>

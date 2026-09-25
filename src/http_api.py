@@ -12,9 +12,12 @@ from .domain import Actor, DomainError, PermissionDenied, ValidationError
 RECORD_RE = re.compile(r"^/api/records/(\d+)$")
 ACTION_RE = re.compile(r"^/api/records/(\d+)/actions/([a-z_]+)$")
 AUDIT_RE = re.compile(r"^/api/records/(\d+)/audit$")
+RECORD_ESCORTS_RE = re.compile(r"^/api/records/(\d+)/escorts$")
+RECORD_ESCORT_RETRY_RE = re.compile(r"^/api/records/(\d+)/escorts/retry$")
+ASSIGNMENT_COMPLETE_RE = re.compile(r"^/api/escorts/assignments/(\d+)/complete$")
 
 
-def make_handler(service: Any, static_dir: Path):
+def make_handler(service: Any, static_dir: Path, tug_service: Any = None):
     class Handler(BaseHTTPRequestHandler):
         server_version = "port-berth/1.0"
 
@@ -76,6 +79,16 @@ def make_handler(service: Any, static_dir: Path):
                     records = service.list_records(self._actor(), state=query.get("state", [None])[0], limit=int(query.get("limit", ["100"])[0]))
                     self._send(200, {"items": records})
                     return
+                if tug_service is not None and parsed.path == "/api/tugs":
+                    self._send(200, {"items": tug_service.list_tugs(self._actor())})
+                    return
+                if tug_service is not None and parsed.path == "/api/escorts/pending":
+                    self._send(200, {"items": tug_service.pending(self._actor())})
+                    return
+                match = RECORD_ESCORTS_RE.match(parsed.path)
+                if tug_service is not None and match:
+                    self._send(200, tug_service.record_escorts(self._actor(), int(match.group(1))))
+                    return
                 match = RECORD_RE.match(parsed.path)
                 if match:
                     self._send(200, service.get_record(self._actor(), int(match.group(1))))
@@ -99,6 +112,17 @@ def make_handler(service: Any, static_dir: Path):
                     record = service.create(self._actor(), body.get("reference", ""), body.get("data", {}))
                     self._send(201, record)
                     return
+                if tug_service is not None and parsed.path == "/api/tugs":
+                    self._send(201, tug_service.register_tug(self._actor(), body))
+                    return
+                match = RECORD_ESCORT_RETRY_RE.match(parsed.path)
+                if tug_service is not None and match:
+                    self._send(200, tug_service.retry_record(self._actor(), int(match.group(1))))
+                    return
+                match = ASSIGNMENT_COMPLETE_RE.match(parsed.path)
+                if tug_service is not None and match:
+                    self._send(200, tug_service.complete_assignment(self._actor(), int(match.group(1)), body))
+                    return
                 match = ACTION_RE.match(parsed.path)
                 if match:
                     version = body.get("expected_version")
@@ -114,5 +138,5 @@ def make_handler(service: Any, static_dir: Path):
     return Handler
 
 
-def create_server(host: str, port: int, service: Any, static_dir: Path) -> ThreadingHTTPServer:
-    return ThreadingHTTPServer((host, port), make_handler(service, static_dir))
+def create_server(host: str, port: int, service: Any, static_dir: Path, tug_service: Any = None) -> ThreadingHTTPServer:
+    return ThreadingHTTPServer((host, port), make_handler(service, static_dir, tug_service))

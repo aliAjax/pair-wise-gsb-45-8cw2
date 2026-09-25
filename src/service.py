@@ -8,10 +8,12 @@ from .rules import DomainRules
 
 
 class Service:
-    def __init__(self, repository: Repository, rules: DomainRules, audit: AuditRecorder = None) -> None:
+    def __init__(self, repository: Repository, rules: DomainRules, audit: AuditRecorder = None, escort_hooks=None) -> None:
         self.repository = repository
         self.rules = rules
         self.audit = audit or AuditRecorder(repository)
+        # 拖轮护航钩子：创建计划后自动派工、取消计划时立即释放，由组装层注入
+        self.escort_hooks = escort_hooks
 
     @staticmethod
     def _actor(actor: Actor) -> Actor:
@@ -31,7 +33,11 @@ class Service:
         reference = text({"reference": reference}, "reference")
         prepared = self.rules.prepare_create(payload or {})
         self.rules.check_create_conflicts(prepared, self.repository.list_records(limit=500))
-        return self.repository.create(reference, self.rules.INITIAL_STATE, prepared, actor.user_id)
+        record = self.repository.create(reference, self.rules.INITIAL_STATE, prepared, actor.user_id)
+        if self.escort_hooks is not None:
+            # 新计划立即尝试安排进出港护航，推力不够或时段冲突会留在待配区
+            self.escort_hooks.dispatch_new_record(record)
+        return record
 
     def list_records(self, actor: Actor, state: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
         actor = self._actor(actor)
@@ -52,7 +58,7 @@ class Service:
         record = self.repository.get(record_id)
         self.rules.require_transition(record, action)
         new_state, new_payload, summary = self.rules.apply_action(record, action, data or {})
-        return self.repository.mutate(
+        result = self.repository.mutate(
             record_id=record_id,
             expected_version=int(expected_version),
             state=new_state,
@@ -61,6 +67,10 @@ class Service:
             action=action,
             details={"summary": summary, "input": data or {}, "from": record["state"], "to": new_state},
         )
+        if action == "cancel" and self.escort_hooks is not None:
+            # 取消提交成功后立即释放该计划的护航拖轮
+            self.escort_hooks.release_for_record(record_id)
+        return result
 
     def timeline(self, actor: Actor, record_id: int) -> List[Dict[str, Any]]:
         actor = self._actor(actor)
